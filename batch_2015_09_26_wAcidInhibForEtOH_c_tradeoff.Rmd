@@ -1,0 +1,141 @@
+---
+title: "Modeling Microbial Mutualisms"
+author: "Jay T. Lennon"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+header-includes:
+   - \usepackage{array}
+output: pdf_document
+geometry: margin=2.54cm
+---
+
+## Overview
+Simulation model that explores interactions between Esherichia coli and Rhodopseudomonas palustris. Under anaerobic conditions, glucose is consumed by E. coli and converts some of this to fermentation byproducts, which serve as a carbon and energy source for R. palustris. In turn, R. palustris fixes atmospheric nitrogen, which is converted into ammonia and serves as E. coli's sole source of nitrogen. Following attempts to captures these baisc features using a set of coupled differential equations. 
+
+Modified by Jake for batch growth
+
+## Set working directory
+```{r}
+rm(list=ls()) # clears your working directory
+getwd() # tells you your current working directory
+setwd("~/GitHub/Task3") # sets your working directory
+```
+
+## Install packages
+```{r}
+# install.packages("deSolve") # run this first time
+require("deSolve") # installs any dependencies
+```
+
+## Mutualism function
+```{r}
+mutfun <- function(times, y, parms) {
+  with(as.list(c(y, parms)), {
+   ue <- uE * (G/(Kg + G)) * ((A + Ax) /(Kae + A + Ax)) * (be/(be+C+Fr))
+   ur <- uR * (N/(Kn + N)) * ((C + Cx)/(Kc + C + Cx)) * (br/(br+C+Fr)) # + (uR2 * ((A+Ax) /(Kar+A+Ax)) * ((C+Cx)/(Kc + C + Cx)))
+    #dgdt <- (D * Gin) - (ue*E*a) - (E*a*(G/(Kg+G))) - (ue*E/Yg) - (D * G) # Glucose
+    #dndt <- (D * Nin) - (ur*R*z) - (ur * R / Yn) - (D * N) # N2
+  #  dcdt <- (E*ue*a) + (E*a*(G/(Kg + G))) - (ur*R/Yc) - (D*C) # OAcs
+  #  dadt <- (R*ur*z)  - (ue*E/Ya) - (D * A) # NH4
+  #  dedt <- ue * E - (D * E) # E. coli
+  #  drdt <- ur * R - (D * R) # R. palustris
+    
+    dgdt <- -ue*E/Yg  - (ue*E*(c+f+e)) - E*(c+f+e)*(G/(Kg+G))*(ng/(ng+ue))#Glucose
+    dndt <- - (ur*R*z) - (ur * R / Yn)  # N2
+   dcdt <- (E*ue*c) + (E*c*(G/(Kg + G))*(ng/(ng+ue))) - (ur*R/Yc)# - (D*C)# OAcs except formate
+   dfdt <- (E*ue*f) + (E*f*(G/(Kg+G))*(ng/(ng+ue))) #formate excretion rate
+    # dcdt <- (E*ue*a) + (E*a*(G/(Kg + G))) - (ur*R/Yc) - (D*C)# OAcs
+    dadt <- (R*ur*z)  - (ue*E/Ya) #- (ur*R/Yar)# NH4
+    
+    dedt <- ue * E  # E. coli
+    drdt <- ur * R   # R. palustris
+    dEtdt <- (E*ue*e) + (E*e*(G/(Kg+G))*(ng/(ng+ue)))
+    return(list(c(dgdt, dndt, dcdt, dfdt, dadt, dedt, drdt,dEtdt))) #dcdt, dndt, dadt, drdt
+  })
+}
+```
+
+## Parameters and initial conditions
+```{r}
+# Parameters
+parms <- c(uE = 0.347, # E. coli max growth rate (h^-1)
+           uR = 0.063, # R. palustrix max growth rate (h^-1)
+           uR2 = 0.0236, # OPTION represents boost to new max in presence of NH4+ (h^-1)
+           #ue and ur are Rpal growth rates at any given time
+           Yg = 20000000000,#13888800000, # Ec growth yield cells/mmol each Glc C 
+           Yn = 94423800000, # Rp growth yield cells/mmol each N2 N
+           Yc = 82994820000, #Rp growth yield on org acids - based on cells/mmol ace C 
+           Ya = 129581200000, #Ec growth yield on on NH4+ (cells/mmol)
+           Yar = 259000000, #OPTION - needs updated value - Rp growth yield on on NH4+ (cells/mmol)
+        D = 0.26,#/48, # CSTAT OPTION Dilution rate (h^1)
+           Kg = 0.020, # half saturation constant for glucose (mM) Buhr et al 1992 J Biol Chem 267:3847-51
+           Kc = 0.011, # half saturation constatnt for fermentation product (mM) (assumed)
+           Kn = 0.100, # half saturation constant for N2 (mM) PMID: 440158
+           Kae = 0.010, # half saturation constant for ammonia (mM) by Ec http://www.sciencemag.org/content/305/5690/1587
+          Kar = 0.015, # OPTION half saturation constant for ammonia (mM) by Rp
+           a = 1.625*10^-7, # OPTION conversion for G -> all ferment prod per E. coli
+           c = 4*10^-11,#7.14*10^-11, # mmol per CFU - all products except formate
+           f = 1.08*10^-10, # mmol formate per CFU
+           e = 2.66*10^-11, # mmol etoh per CFU
+           z = 1*10^-13,#, # conversion for N2 -> NH3 per R. palustris (assumed)
+          ng = 0.01, # factor used in formula to shift between growing vs nongrowing C-excretion
+        Gin <- 25, #CSTAT OPTION
+         Nin <- 100, #CSTAT OPTION
+        be<-20, # resistance of Ecoli to acid; reflects medium buffering
+        br<-1, # resistance of Rpal to acid; reflects medium buffering
+        Ax<-0, #OPTION externally added ammonium
+        Cx<-0) #OPTION externally added Oacs           
+# Initial conditions  THE ORDER HERE MUST MATCH THE RETURNS ABOVE 
+init <- c(G = 25,# Glucose (mM)
+          N = 76,    # N2 (mM) 
+         C = 0, # Fermentation product except for (mM)
+         Fr = 0, #formate excreted
+          A = 0, # NH4 (mM)
+          E = 10000000,      # E. coli (biomass? units?)
+          R = 10000000,     # R. palustris (biomass?, units?)
+          Et = 0) #ethanol
+# Time range and time step
+Tmax = 3200
+TimeStep = 1
+Time = seq(0, Tmax, by = TimeStep)
+```
+
+## Output
+```{r}
+out <- ode(y = init, times = Time, func = mutfun, parms = parms, method = "lsode")
+```
+
+## Plotting
+```{r}
+plot(out[,1], out[,7], xlab = "time (hr)", ylab = "Ecoli", type = "l", las = 1, 
+     col = "gold", lwd = 4, ylim = c(0, 1*max(out[,7]))) # plot E. coli biomass
+par(new=T)
+plot(out[,1], out[,8], xlab="", ylab ="",  type = "l",las = 1,
+     col = "purple", ylim=c(0,1.2*max(out[,8])) )
+axis(4, ylim=c(0,1.2*max(out[,7])), lwd=2, line=3.5)
+mtext(4, text="Rpal", line=5.5)
+par(new=T)
+plot(out[,1], out[,4], xlab="", ylab ="",  type = "l",las = 1,
+     col = "green", ylim=c(0,1.2*max(out[,4])) )
+axis(4, ylim=c(0,1.2*max(out[,4])), lwd=2, line=3.5)
+mtext(4, text="Oacs", line=5.5)
+par(new=T)
+
+plot(out[,1], out[,6], xlab="", ylab ="",  type = "l",las = 1,
+     col = "blue", ylim=c(0,1.3*max(out[,6])) )
+axis(4, ylim=c(0,0.1*max(out[,4])), lwd=2, line=3.5)
+mtext(4, text="NH4+", line=5.5)
+par(new=T)
+plot(out[,1], out[,2], xlab="", ylab ="",  type = "l",las = 1,
+     col = "black", ylim=c(0,1.4*max(out[,2])) )
+axis(4, ylim=c(0,1.2*max(out[,2])), lwd=2, line=3.5)
+mtext(4, text="glucose", line=5.5)
+
+par(new=T)
+plot(out[,1], out[,3], xlab="", ylab ="",  type = "l",las = 1,
+     col = "gray", ylim=c(0,1.4*max(out[,3])) )
+axis(4, ylim=c(0,1.2*max(out[,3])), lwd=2, line=3.5)
+mtext(4, text="glucose", line=5.5)
+
+#points(out[,1], out[,7], type = "l", col = "purple", lwd = 4)
+#points(out[,1], out[,2], type = "l", col = "green", lwd = 4)
+```
